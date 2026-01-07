@@ -69,26 +69,6 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
     );
   }
 
-  // Configure Solana clusters based on environment
-  const solanaClusters =
-    config.solana.network === "mainnet-beta"
-      ? [
-          // Production: mainnet first (default), devnet as fallback
-          { name: "mainnet-beta" as const, rpcUrl: config.solana.rpcUrl },
-          {
-            name: "devnet" as const,
-            rpcUrl: "https://api.devnet.solana.com",
-          },
-        ]
-      : [
-          // Development: devnet first (default), mainnet as option
-          { name: "devnet" as const, rpcUrl: config.solana.rpcUrl },
-          {
-            name: "mainnet-beta" as const,
-            rpcUrl: "https://api.mainnet-beta.solana.com",
-          },
-        ];
-
   return (
     <Privy
       appId={config.privy.appId}
@@ -112,8 +92,6 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
             connectors: solanaConnectors,
           },
         },
-        // Solana network configuration - first cluster is the default
-        solanaClusters,
       }}
     >
       {children}

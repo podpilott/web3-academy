@@ -1,5 +1,52 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Web3 Academy - NFT-Gated Learning Platform
+
+A Web3 learning platform with Solana NFT-based access control, Privy authentication, and course management.
+
+## Environment Configuration
+
+### Required Environment Variables
+
+Create a `.env.local` file with the following variables:
+
+```env
+# Privy Authentication
+NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
+
+# Solana Network Configuration
+NEXT_PUBLIC_SOLANA_NETWORK=devnet
+NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
+
+# NFT Collection
+NEXT_PUBLIC_PASS_COLLECTION=your-collection-mint-address
+
+# Backend API
+NEXT_PUBLIC_API_URL=http://localhost:8080
+```
+
+### Solana Network Configuration
+
+The app connects to Solana networks via environment variables. The network is configured at build/deployment time.
+
+**Development (Devnet):**
+```env
+NEXT_PUBLIC_SOLANA_NETWORK=devnet
+NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
+```
+
+**Production (Mainnet):**
+```env
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+NEXT_PUBLIC_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+```
+
+**Custom/Private RPC (Helius, QuickNode, etc.):**
+```env
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+NEXT_PUBLIC_SOLANA_RPC_URL=https://your-custom-rpc-url.com
+```
+
 ## Getting Started
 
 First, run the development server:

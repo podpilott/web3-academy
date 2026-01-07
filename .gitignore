@@ -31,7 +31,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # Environment files (ALL env files excluded - no exceptions)
-.env*
+# .env*
 
 # Keypair files (contain private keys - NEVER commit)
 *keypair*.json

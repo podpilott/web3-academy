@@ -30,8 +30,17 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Environment files (ALL env files excluded - no exceptions)
 .env*
+
+# Keypair files (contain private keys - NEVER commit)
+*keypair*.json
+*.key
+*.pem
+
+# Scripts output and logs
+scripts/*.log
+scripts/*.txt
 
 # vercel
 .vercel

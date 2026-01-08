@@ -1,18 +1,17 @@
 /**
  * Custom hook for minting Student Pass NFTs
  *
- * Integrates Metaplex Umi with Privy/Phantom wallet for signing transactions
+ * Integrates Metaplex Umi with any Solana wallet (Phantom, Solflare, Backpack, embedded)
  */
 
 import { useState, useCallback } from "react";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { mplTokenMetadata, createNft } from "@metaplex-foundation/mpl-token-metadata";
 import {
     generateSigner,
     publicKey,
     percentAmount,
-    signerIdentity,
 } from "@metaplex-foundation/umi";
 import { walletAdapterIdentity } from "@metaplex-foundation/umi-signer-wallet-adapters";
 import { config } from "@/lib/config";
@@ -37,9 +36,48 @@ interface UseMintStudentPass {
     walletAddress: string | null;
 }
 
+// Solana wallet provider interface
+interface SolanaProvider {
+    publicKey: { toString(): string };
+    isConnected?: boolean;
+    connect(): Promise<void>;
+    signTransaction<T>(tx: T): Promise<T>;
+    signAllTransactions<T>(txs: T[]): Promise<T[]>;
+    signMessage(msg: Uint8Array): Promise<{ signature: Uint8Array } | Uint8Array>;
+}
+
+/**
+ * Get any available Solana wallet provider (Phantom, Solflare, Backpack)
+ */
+function getSolanaProvider(): SolanaProvider | null {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const windowAny = window as unknown as Record<string, any>;
+
+    // Check for Phantom
+    if (windowAny.phantom?.solana) {
+        return windowAny.phantom.solana as SolanaProvider;
+    }
+
+    // Check for Solflare
+    if (windowAny.solflare?.isSolflare) {
+        return windowAny.solflare as SolanaProvider;
+    }
+
+    // Check for Backpack
+    if (windowAny.backpack?.isBackpack) {
+        return windowAny.backpack as SolanaProvider;
+    }
+
+    // Check for generic Solana provider
+    if (windowAny.solana) {
+        return windowAny.solana as SolanaProvider;
+    }
+
+    return null;
+}
+
 export function useMintStudentPass(): UseMintStudentPass {
     const { authenticated, user } = usePrivy();
-    const { wallets } = useWallets();
     const [isMinting, setIsMinting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [lastMint, setLastMint] = useState<MintResult | null>(null);
@@ -49,6 +87,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         if (!user) return null;
 
         // Find Solana wallet in linked accounts
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const solanaAccount = user.linkedAccounts?.find((account: any) => {
             if (account.type === "wallet" && account.chainType === "solana") {
                 return true;
@@ -88,7 +127,6 @@ export function useMintStudentPass(): UseMintStudentPass {
             // Get collection address
             const collectionAddress = config.web3Academy.studentPassCollection;
             console.log("Config studentPassCollection:", collectionAddress);
-            console.log("Full config:", config);
 
             if (!collectionAddress) {
                 throw new Error(
@@ -96,31 +134,42 @@ export function useMintStudentPass(): UseMintStudentPass {
                 );
             }
 
-            // For Phantom connected via Privy, get the Solana provider
-            // Phantom injects window.phantom.solana
-            const phantom = (window as any).phantom?.solana;
-            if (!phantom) {
-                throw new Error("Phantom wallet not found. Please install Phantom extension.");
+            // Get any available Solana wallet provider
+            const provider = getSolanaProvider();
+
+            if (!provider) {
+                throw new Error(
+                    "No Solana wallet extension found. Please install Phantom, Solflare, or Backpack."
+                );
             }
 
-            // Connect to Phantom if not connected
-            if (!phantom.isConnected) {
-                await phantom.connect();
+            // Connect if not connected
+            if (!provider.isConnected) {
+                await provider.connect();
             }
+
+            console.log("Using wallet provider:", provider.publicKey.toString());
 
             // Create Umi instance
             const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
 
-            // Use Phantom as the wallet adapter
-            // walletAdapterIdentity expects a wallet adapter interface
-            const phantomAdapter = {
-                publicKey: phantom.publicKey,
-                signTransaction: async (tx: any) => phantom.signTransaction(tx),
-                signAllTransactions: async (txs: any[]) => phantom.signAllTransactions(txs),
-                signMessage: async (msg: Uint8Array) => phantom.signMessage(msg),
+            // Create a wallet adapter compatible with Umi
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const walletAdapter: any = {
+                publicKey: provider.publicKey,
+                signTransaction: async <T>(tx: T): Promise<T> => provider.signTransaction(tx),
+                signAllTransactions: async <T>(txs: T[]): Promise<T[]> => provider.signAllTransactions(txs),
+                signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
+                    const result = await provider.signMessage(msg);
+                    // Handle both signature formats
+                    if (result instanceof Uint8Array) {
+                        return result;
+                    }
+                    return result.signature;
+                },
             };
 
-            umi.use(walletAdapterIdentity(phantomAdapter));
+            umi.use(walletAdapterIdentity(walletAdapter));
 
             // Generate new mint address
             const nftMint = generateSigner(umi);

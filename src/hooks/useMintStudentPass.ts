@@ -174,27 +174,48 @@ export function useMintStudentPass(): UseMintStudentPass {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             let walletAdapter: any = null;
 
-            // First, try Privy's Solana wallets (works for both embedded and connected external)
-            const privyWallet = solanaWallets.find(w => w.address === solanaAddress);
+            // Debug: log all wallets from Privy
+            console.log("All Privy wallets:", wallets);
+            console.log("Filtered Solana wallets:", solanaWallets);
+
+            // First, try to find Privy wallet by address
+            // Try both the filtered list and the full list
+            let privyWallet = solanaWallets.find((w: any) => w.address === solanaAddress);
+
+            // Fallback: search in all wallets if not found in filtered list
+            if (!privyWallet) {
+                console.log("Wallet not found in filtered list, searching all wallets...");
+                privyWallet = wallets.find((w: any) => w.address === solanaAddress);
+            }
 
             if (privyWallet) {
-                console.log("Using Privy Solana wallet:", privyWallet.walletClientType);
+                console.log("Found Privy wallet:", {
+                    address: (privyWallet as any).address,
+                    walletClientType: (privyWallet as any).walletClientType,
+                    chainType: (privyWallet as any).chainType,
+                });
 
-                // Get the provider from Privy wallet - this works for embedded wallets too!
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const provider = await (privyWallet as any).getProvider();
+                // Check if wallet has getProvider method
+                if (typeof (privyWallet as any).getProvider === "function") {
+                    console.log("Getting provider from Privy wallet...");
+                    const provider = await (privyWallet as any).getProvider();
+                    console.log("Provider obtained:", provider);
 
-                walletAdapter = {
-                    publicKey: provider.publicKey,
-                    signTransaction: async <T>(tx: T): Promise<T> => provider.signTransaction(tx),
-                    signAllTransactions: async <T>(txs: T[]): Promise<T[]> => provider.signAllTransactions(txs),
-                    signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
-                        const result = await provider.signMessage(msg);
-                        if (result instanceof Uint8Array) return result;
-                        return result.signature;
-                    },
-                };
+                    walletAdapter = {
+                        publicKey: provider.publicKey,
+                        signTransaction: async <T>(tx: T): Promise<T> => provider.signTransaction(tx),
+                        signAllTransactions: async <T>(txs: T[]): Promise<T[]> => provider.signAllTransactions(txs),
+                        signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
+                            const result = await provider.signMessage(msg);
+                            if (result instanceof Uint8Array) return result;
+                            return result.signature;
+                        },
+                    };
+                } else {
+                    console.log("Wallet does not have getProvider method, available methods:", Object.keys(privyWallet));
+                }
             } else {
+                console.log("Wallet not found in Privy wallets, trying browser extension...");
                 // Fallback: try browser extension directly
                 const externalProvider = getExternalWalletProvider();
 

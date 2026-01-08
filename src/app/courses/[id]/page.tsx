@@ -56,7 +56,7 @@ export default function CourseDetailPage() {
                 }
 
                 const response = await fetch(
-                    `${config.api.baseUrl}/api/v1/courses/${courseId}`,
+                    `${config.api.baseUrl}/api/v1/public/courses/${courseId}`,
                     { headers }
                 );
 
@@ -132,8 +132,8 @@ export default function CourseDetailPage() {
                         {course.is_gated && (
                             <span
                                 className={`text-xs px-2 py-1 rounded ${course.has_access
-                                        ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
-                                        : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+                                    ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
+                                    : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
                                     }`}
                             >
                                 {course.has_access ? "✓ Unlocked" : "🔒 Pass Required"}

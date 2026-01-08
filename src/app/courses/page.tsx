@@ -54,12 +54,16 @@ export default function CoursesPage() {
                     }
                 }
 
-                const response = await fetch(`${config.api.baseUrl}/api/v1/courses`, {
+                const response = await fetch(`${config.api.baseUrl}/api/v1/public/courses`, {
                     headers,
                 });
 
                 if (!response.ok) {
-                    throw new Error("Failed to fetch courses");
+                    console.error("Failed to fetch courses:", response.status);
+                    // Don't throw - gracefully handle as empty list
+                    setCourses([]);
+                    setLoading(false);
+                    return;
                 }
 
                 const data: CoursesResponse = await response.json();
@@ -127,6 +131,30 @@ export default function CoursesPage() {
                     Learn Web3 development from beginner to advanced
                 </p>
 
+                {/* Info banner for unauthenticated users */}
+                {!authenticated && courses.length > 0 && (
+                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+                        <div className="flex items-start gap-3">
+                            <span className="text-xl">ℹ️</span>
+                            <div>
+                                <p className="text-blue-900 dark:text-blue-100 font-medium">
+                                    Sign in to access courses
+                                </p>
+                                <p className="text-blue-700 dark:text-blue-300 text-sm mt-1">
+                                    Browse our course catalog below. Click any course to learn more, or{" "}
+                                    <button
+                                        onClick={login}
+                                        className="underline font-medium hover:text-blue-900 dark:hover:text-blue-100"
+                                    >
+                                        sign in
+                                    </button>
+                                    {" "}to get started.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {error && (
                     <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-6">
                         <p className="text-red-600 dark:text-red-400">{error}</p>
@@ -135,10 +163,21 @@ export default function CoursesPage() {
 
                 {/* Course Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {courses.map((course) => (
+                    {courses.map((course) => {
+                        const handleClick = (e: React.MouseEvent) => {
+                            // If course is gated and user doesn't have access, redirect to login
+                            if (course.is_gated && !course.has_access && !authenticated) {
+                                e.preventDefault();
+                                login();
+                            }
+                            // Otherwise, let the Link navigate normally
+                        };
+
+                        return (
                         <Link
                             key={course.id}
                             href={`/courses/${course.id}`}
+                            onClick={handleClick}
                             className="group block bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors"
                         >
                             {/* Thumbnail */}
@@ -190,7 +229,8 @@ export default function CoursesPage() {
                                 </div>
                             </div>
                         </Link>
-                    ))}
+                        );
+                    })}
                 </div>
 
                 {courses.length === 0 && !loading && (

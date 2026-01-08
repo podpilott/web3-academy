@@ -3,17 +3,19 @@
  *
  * Supports BOTH wallet types:
  * - External wallets (Phantom, Solflare, Backpack browser extensions)
- * - Embedded wallets (Privy-created for email/Google login)
+ * - Embedded wallets (Privy-created for email/Google login) - uses Privy's signTransaction
  */
 
 import { useState, useCallback, useMemo } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { useSignTransaction } from "@privy-io/react-auth/solana";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { mplTokenMetadata, createNft } from "@metaplex-foundation/mpl-token-metadata";
 import {
     generateSigner,
     publicKey,
     percentAmount,
+    transactionBuilder,
 } from "@metaplex-foundation/umi";
 import { walletAdapterIdentity } from "@metaplex-foundation/umi-signer-wallet-adapters";
 import { config } from "@/lib/config";
@@ -84,16 +86,10 @@ function getExternalWalletProvider(): SolanaProvider | null {
 export function useMintStudentPass(): UseMintStudentPass {
     const { authenticated, user } = usePrivy();
     const { wallets } = useWallets();
+    const { signTransaction: privySignTransaction } = useSignTransaction();
     const [isMinting, setIsMinting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [lastMint, setLastMint] = useState<MintResult | null>(null);
-
-    // Filter for Solana wallets from Privy
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const solanaWallets = useMemo(() =>
-        wallets.filter((w: any) => w.chainType === "solana"),
-        [wallets]
-    );
 
     // Get the Solana wallet address from Privy user.linkedAccounts
     const getSolanaWalletAddress = useCallback((): string | null => {
@@ -119,18 +115,28 @@ export function useMintStudentPass(): UseMintStudentPass {
         return null;
     }, [user]);
 
+    // Get embedded wallet info from linked accounts
+    const getEmbeddedWallet = useCallback(() => {
+        if (!user) return null;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const embeddedWallet = user.linkedAccounts?.find((account: any) =>
+            account.type === "wallet" &&
+            account.chainType === "solana" &&
+            account.walletClientType === "privy"
+        );
+
+        return embeddedWallet || null;
+    }, [user]);
+
     const walletAddress = getSolanaWalletAddress();
 
     // Determine wallet type
     const walletType = useMemo((): "embedded" | "external" | null => {
         if (!user) return null;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const walletAccount = user.linkedAccounts?.find((a: any) =>
-            a.type === "wallet" && a.chainType === "solana"
-        ) as { walletClientType?: string } | undefined;
-
-        if (walletAccount?.walletClientType === "privy") {
+        const embeddedWallet = getEmbeddedWallet();
+        if (embeddedWallet) {
             return "embedded";
         }
 
@@ -140,7 +146,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         }
 
         return null;
-    }, [user]);
+    }, [user, getEmbeddedWallet]);
 
     const mint = useCallback(async (): Promise<MintResult> => {
         setError(null);
@@ -152,9 +158,12 @@ export function useMintStudentPass(): UseMintStudentPass {
             }
 
             const solanaAddress = getSolanaWalletAddress();
+            const embeddedWallet = getEmbeddedWallet();
+
             console.log("Solana address:", solanaAddress);
             console.log("Wallet type:", walletType);
-            console.log("Available Privy Solana wallets:", solanaWallets);
+            console.log("Embedded wallet:", embeddedWallet);
+            console.log("All Privy wallets from useWallets:", wallets);
 
             if (!solanaAddress) {
                 throw new Error("No Solana wallet found. Please connect a Solana wallet.");
@@ -170,85 +179,98 @@ export function useMintStudentPass(): UseMintStudentPass {
                 );
             }
 
-            // Try to get wallet signer based on wallet type
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            let walletAdapter: any = null;
+            // Check if using embedded wallet
+            if (embeddedWallet) {
+                console.log("Using embedded wallet, will use Privy signTransaction...");
 
-            // Debug: log all wallets from Privy
-            console.log("All Privy wallets:", wallets);
-            console.log("Filtered Solana wallets:", solanaWallets);
+                // For embedded wallets, we need to create the transaction with Umi,
+                // then serialize it and sign with Privy's signTransaction
+                const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
 
-            // First, try to find Privy wallet by address
-            // Try both the filtered list and the full list
-            let privyWallet = solanaWallets.find((w: any) => w.address === solanaAddress);
+                // Generate new mint address
+                const nftMint = generateSigner(umi);
 
-            // Fallback: search in all wallets if not found in filtered list
-            if (!privyWallet) {
-                console.log("Wallet not found in filtered list, searching all wallets...");
-                privyWallet = wallets.find((w: any) => w.address === solanaAddress);
-            }
+                console.log("Creating NFT transaction with mint:", nftMint.publicKey.toString());
 
-            if (privyWallet) {
-                console.log("Found Privy wallet:", {
-                    address: (privyWallet as any).address,
-                    walletClientType: (privyWallet as any).walletClientType,
-                    chainType: (privyWallet as any).chainType,
+                // Build the transaction without sending
+                const builder = createNft(umi, {
+                    mint: nftMint,
+                    name: STUDENT_PASS_NAME,
+                    symbol: STUDENT_PASS_SYMBOL,
+                    uri: STUDENT_PASS_URI,
+                    sellerFeeBasisPoints: percentAmount(0),
+                    collection: {
+                        key: publicKey(collectionAddress),
+                        verified: false,
+                    },
                 });
 
-                // Check if wallet has getProvider method
-                if (typeof (privyWallet as any).getProvider === "function") {
-                    console.log("Getting provider from Privy wallet...");
-                    const provider = await (privyWallet as any).getProvider();
-                    console.log("Provider obtained:", provider);
+                // Build the transaction
+                const transaction = await builder.buildAndSign(umi);
 
-                    walletAdapter = {
-                        publicKey: provider.publicKey,
-                        signTransaction: async <T>(tx: T): Promise<T> => provider.signTransaction(tx),
-                        signAllTransactions: async <T>(txs: T[]): Promise<T[]> => provider.signAllTransactions(txs),
-                        signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
-                            const result = await provider.signMessage(msg);
-                            if (result instanceof Uint8Array) return result;
-                            return result.signature;
-                        },
-                    };
-                } else {
-                    console.log("Wallet does not have getProvider method, available methods:", Object.keys(privyWallet));
-                }
-            } else {
-                console.log("Wallet not found in Privy wallets, trying browser extension...");
-                // Fallback: try browser extension directly
-                const externalProvider = getExternalWalletProvider();
+                console.log("Transaction built, serializing...");
 
-                if (externalProvider) {
-                    console.log("Using external browser wallet");
+                // Serialize to Uint8Array for Privy
+                const serializedTx = umi.transactions.serialize(transaction);
 
-                    // Connect if not connected
-                    if (!externalProvider.isConnected) {
-                        await externalProvider.connect();
-                    }
+                console.log("Signing with Privy embedded wallet...");
 
-                    walletAdapter = {
-                        publicKey: externalProvider.publicKey,
-                        signTransaction: async <T>(tx: T): Promise<T> => externalProvider.signTransaction(tx),
-                        signAllTransactions: async <T>(txs: T[]): Promise<T[]> => externalProvider.signAllTransactions(txs),
-                        signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
-                            const result = await externalProvider.signMessage(msg);
-                            if (result instanceof Uint8Array) return result;
-                            return result.signature;
-                        },
-                    };
-                }
+                // Sign with Privy's embedded wallet
+                // The useSignTransaction hook requires a wallet object
+                const signedTx = await privySignTransaction({
+                    transaction: serializedTx,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    wallet: embeddedWallet as any,
+                });
+
+                console.log("Transaction signed, sending...");
+
+                // Deserialize the signed transaction and send
+                const signedTransaction = umi.transactions.deserialize(signedTx.signedTransaction);
+                const signature = await umi.rpc.sendTransaction(signedTransaction);
+
+                console.log("Mint successful! Signature:", signature);
+
+                const mintResult: MintResult = {
+                    success: true,
+                    mintAddress: nftMint.publicKey.toString(),
+                    signature: Buffer.from(signature).toString("base64"),
+                };
+
+                setLastMint(mintResult);
+                return mintResult;
             }
 
-            if (!walletAdapter) {
+            // For external wallets, use the browser extension
+            const externalProvider = getExternalWalletProvider();
+
+            if (!externalProvider) {
                 throw new Error(
-                    "Could not get wallet signer. Please try reconnecting your wallet."
+                    "No wallet found. Please install Phantom, Solflare, or Backpack browser extension."
                 );
             }
 
+            console.log("Using external browser wallet");
+
+            // Connect if not connected
+            if (!externalProvider.isConnected) {
+                await externalProvider.connect();
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const walletAdapter: any = {
+                publicKey: externalProvider.publicKey,
+                signTransaction: async <T>(tx: T): Promise<T> => externalProvider.signTransaction(tx),
+                signAllTransactions: async <T>(txs: T[]): Promise<T[]> => externalProvider.signAllTransactions(txs),
+                signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
+                    const result = await externalProvider.signMessage(msg);
+                    if (result instanceof Uint8Array) return result;
+                    return result.signature;
+                },
+            };
+
             // Create Umi instance
             const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
-
             umi.use(walletAdapterIdentity(walletAdapter));
 
             // Generate new mint address
@@ -293,7 +315,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         } finally {
             setIsMinting(false);
         }
-    }, [authenticated, user, getSolanaWalletAddress, walletType, solanaWallets]);
+    }, [authenticated, user, getSolanaWalletAddress, getEmbeddedWallet, walletType, wallets, privySignTransaction]);
 
     return { mint, isMinting, error, lastMint, walletAddress, walletType };
 }

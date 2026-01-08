@@ -1,11 +1,13 @@
 /**
  * Custom hook for minting Student Pass NFTs
  *
- * Integrates Metaplex Umi with any Solana wallet (Phantom, Solflare, Backpack, embedded)
+ * Supports BOTH wallet types:
+ * - External wallets (Phantom, Solflare, Backpack browser extensions)
+ * - Embedded wallets (Privy-created for email/Google login)
  */
 
-import { useState, useCallback } from "react";
-import { usePrivy } from "@privy-io/react-auth";
+import { useState, useCallback, useMemo } from "react";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { mplTokenMetadata, createNft } from "@metaplex-foundation/mpl-token-metadata";
 import {
@@ -34,9 +36,10 @@ interface UseMintStudentPass {
     error: string | null;
     lastMint: MintResult | null;
     walletAddress: string | null;
+    walletType: "embedded" | "external" | null;
 }
 
-// Solana wallet provider interface
+// Solana wallet provider interface for external wallets
 interface SolanaProvider {
     publicKey: { toString(): string };
     isConnected?: boolean;
@@ -47,9 +50,11 @@ interface SolanaProvider {
 }
 
 /**
- * Get any available Solana wallet provider (Phantom, Solflare, Backpack)
+ * Get any available Solana wallet provider from browser extensions
  */
-function getSolanaProvider(): SolanaProvider | null {
+function getExternalWalletProvider(): SolanaProvider | null {
+    if (typeof window === "undefined") return null;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const windowAny = window as unknown as Record<string, any>;
 
@@ -78,9 +83,17 @@ function getSolanaProvider(): SolanaProvider | null {
 
 export function useMintStudentPass(): UseMintStudentPass {
     const { authenticated, user } = usePrivy();
+    const { wallets } = useWallets();
     const [isMinting, setIsMinting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [lastMint, setLastMint] = useState<MintResult | null>(null);
+
+    // Filter for Solana wallets from Privy
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const solanaWallets = useMemo(() =>
+        wallets.filter((w: any) => w.chainType === "solana"),
+        [wallets]
+    );
 
     // Get the Solana wallet address from Privy user.linkedAccounts
     const getSolanaWalletAddress = useCallback((): string | null => {
@@ -108,6 +121,27 @@ export function useMintStudentPass(): UseMintStudentPass {
 
     const walletAddress = getSolanaWalletAddress();
 
+    // Determine wallet type
+    const walletType = useMemo((): "embedded" | "external" | null => {
+        if (!user) return null;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const walletAccount = user.linkedAccounts?.find((a: any) =>
+            a.type === "wallet" && a.chainType === "solana"
+        ) as { walletClientType?: string } | undefined;
+
+        if (walletAccount?.walletClientType === "privy") {
+            return "embedded";
+        }
+
+        // Check if we have a browser extension available
+        if (getExternalWalletProvider()) {
+            return "external";
+        }
+
+        return null;
+    }, [user]);
+
     const mint = useCallback(async (): Promise<MintResult> => {
         setError(null);
         setIsMinting(true);
@@ -119,6 +153,8 @@ export function useMintStudentPass(): UseMintStudentPass {
 
             const solanaAddress = getSolanaWalletAddress();
             console.log("Solana address:", solanaAddress);
+            console.log("Wallet type:", walletType);
+            console.log("Available Privy Solana wallets:", solanaWallets);
 
             if (!solanaAddress) {
                 throw new Error("No Solana wallet found. Please connect a Solana wallet.");
@@ -134,55 +170,63 @@ export function useMintStudentPass(): UseMintStudentPass {
                 );
             }
 
-            // Check if user is using an embedded wallet (created for email/Google login)
-            // Embedded wallets require different transaction signing flow
+            // Try to get wallet signer based on wallet type
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const walletAccount = user.linkedAccounts?.find((a: any) =>
-                a.type === "wallet" && a.chainType === "solana"
-            ) as { walletClientType?: string } | undefined;
+            let walletAdapter: any = null;
 
-            const isEmbeddedWallet = walletAccount?.walletClientType === "privy";
+            // First, try Privy's Solana wallets (works for both embedded and connected external)
+            const privyWallet = solanaWallets.find(w => w.address === solanaAddress);
 
-            // Get any available Solana wallet provider
-            const provider = getSolanaProvider();
+            if (privyWallet) {
+                console.log("Using Privy Solana wallet:", privyWallet.walletClientType);
 
-            if (!provider) {
-                // Give specific guidance based on wallet type
-                if (isEmbeddedWallet) {
-                    throw new Error(
-                        "NFT minting requires a browser wallet extension. Please install Phantom, Solflare, or Backpack, then login with your wallet instead of email/Google."
-                    );
+                // Get the provider from Privy wallet - this works for embedded wallets too!
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const provider = await (privyWallet as any).getProvider();
+
+                walletAdapter = {
+                    publicKey: provider.publicKey,
+                    signTransaction: async <T>(tx: T): Promise<T> => provider.signTransaction(tx),
+                    signAllTransactions: async <T>(txs: T[]): Promise<T[]> => provider.signAllTransactions(txs),
+                    signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
+                        const result = await provider.signMessage(msg);
+                        if (result instanceof Uint8Array) return result;
+                        return result.signature;
+                    },
+                };
+            } else {
+                // Fallback: try browser extension directly
+                const externalProvider = getExternalWalletProvider();
+
+                if (externalProvider) {
+                    console.log("Using external browser wallet");
+
+                    // Connect if not connected
+                    if (!externalProvider.isConnected) {
+                        await externalProvider.connect();
+                    }
+
+                    walletAdapter = {
+                        publicKey: externalProvider.publicKey,
+                        signTransaction: async <T>(tx: T): Promise<T> => externalProvider.signTransaction(tx),
+                        signAllTransactions: async <T>(txs: T[]): Promise<T[]> => externalProvider.signAllTransactions(txs),
+                        signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
+                            const result = await externalProvider.signMessage(msg);
+                            if (result instanceof Uint8Array) return result;
+                            return result.signature;
+                        },
+                    };
                 }
+            }
+
+            if (!walletAdapter) {
                 throw new Error(
-                    "No Solana wallet extension found. Please install Phantom, Solflare, or Backpack browser extension."
+                    "Could not get wallet signer. Please try reconnecting your wallet."
                 );
             }
 
-            // Connect if not connected
-            if (!provider.isConnected) {
-                await provider.connect();
-            }
-
-            console.log("Using wallet provider:", provider.publicKey.toString());
-
             // Create Umi instance
             const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
-
-            // Create a wallet adapter compatible with Umi
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const walletAdapter: any = {
-                publicKey: provider.publicKey,
-                signTransaction: async <T>(tx: T): Promise<T> => provider.signTransaction(tx),
-                signAllTransactions: async <T>(txs: T[]): Promise<T[]> => provider.signAllTransactions(txs),
-                signMessage: async (msg: Uint8Array): Promise<Uint8Array> => {
-                    const result = await provider.signMessage(msg);
-                    // Handle both signature formats
-                    if (result instanceof Uint8Array) {
-                        return result;
-                    }
-                    return result.signature;
-                },
-            };
 
             umi.use(walletAdapterIdentity(walletAdapter));
 
@@ -228,7 +272,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         } finally {
             setIsMinting(false);
         }
-    }, [authenticated, user, getSolanaWalletAddress]);
+    }, [authenticated, user, getSolanaWalletAddress, walletType, solanaWallets]);
 
-    return { mint, isMinting, error, lastMint, walletAddress };
+    return { mint, isMinting, error, lastMint, walletAddress, walletType };
 }

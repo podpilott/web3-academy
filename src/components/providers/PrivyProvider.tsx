@@ -69,7 +69,6 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
       </div>
     );
   }
-
   return (
     <Privy
       appId={config.privy.appId}
@@ -101,4 +100,5 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
     </Privy>
   );
 }
+
 

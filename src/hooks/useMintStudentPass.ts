@@ -134,12 +134,27 @@ export function useMintStudentPass(): UseMintStudentPass {
                 );
             }
 
+            // Check if user is using an embedded wallet (created for email/Google login)
+            // Embedded wallets require different transaction signing flow
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const walletAccount = user.linkedAccounts?.find((a: any) =>
+                a.type === "wallet" && a.chainType === "solana"
+            ) as { walletClientType?: string } | undefined;
+
+            const isEmbeddedWallet = walletAccount?.walletClientType === "privy";
+
             // Get any available Solana wallet provider
             const provider = getSolanaProvider();
 
             if (!provider) {
+                // Give specific guidance based on wallet type
+                if (isEmbeddedWallet) {
+                    throw new Error(
+                        "NFT minting requires a browser wallet extension. Please install Phantom, Solflare, or Backpack, then login with your wallet instead of email/Google."
+                    );
+                }
                 throw new Error(
-                    "No Solana wallet extension found. Please install Phantom, Solflare, or Backpack."
+                    "No Solana wallet extension found. Please install Phantom, Solflare, or Backpack browser extension."
                 );
             }
 

@@ -2,7 +2,13 @@
 
 import { useState, useEffect } from "react";
 import { PrivyProvider as Privy } from "@privy-io/react-auth";
+import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 import { config } from "@/lib/config";
+
+// Solana wallet connectors for browser extension detection
+const solanaConnectors = toSolanaWalletConnectors({
+  shouldAutoConnect: true,
+});
 
 interface PrivyProviderProps {
   children: React.ReactNode;
@@ -71,7 +77,7 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
         appearance: {
           theme: "dark",
           accentColor: "#676FFF",
-          // Solana-only wallet list - no WalletConnect QR (doesn't work with Solana mobile wallets)
+          // Solana-only wallet list - excludes wallet_connect to avoid broken QR flow
           walletList: ["phantom", "solflare", "backpack"],
         },
         // Login methods available to users
@@ -83,9 +89,16 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
           },
           showWalletUIs: true,
         },
+        // External wallet connectors for browser extensions (Phantom, Solflare, Backpack)
+        externalWallets: {
+          solana: {
+            connectors: solanaConnectors,
+          },
+        },
       }}
     >
       {children}
     </Privy>
   );
 }
+

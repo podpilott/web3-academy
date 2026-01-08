@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePassStatus } from "@/contexts/PassContext";
 import { config } from "@/lib/config";
 import { CoursesLoadingSkeleton } from "@/components/ui/CoursesLoadingSkeleton";
+import { MobileWalletGuide } from "@/components/wallet/MobileWalletGuide";
 import Link from "next/link";
 
 interface Course {
@@ -133,26 +134,30 @@ export default function CoursesPage() {
 
                 {/* Info banner for unauthenticated users */}
                 {!authenticated && courses.length > 0 && (
-                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
-                        <div className="flex items-start gap-3">
-                            <span className="text-xl">ℹ️</span>
-                            <div>
-                                <p className="text-blue-900 dark:text-blue-100 font-medium">
-                                    Sign in to access courses
-                                </p>
-                                <p className="text-blue-700 dark:text-blue-300 text-sm mt-1">
-                                    Browse our course catalog below. Click any course to learn more, or{" "}
-                                    <button
-                                        onClick={login}
-                                        className="underline font-medium hover:text-blue-900 dark:hover:text-blue-100"
-                                    >
-                                        sign in
-                                    </button>
-                                    {" "}to get started.
-                                </p>
+                    <>
+                        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
+                            <div className="flex items-start gap-3">
+                                <span className="text-xl">ℹ️</span>
+                                <div>
+                                    <p className="text-blue-900 dark:text-blue-100 font-medium">
+                                        Sign in to access courses
+                                    </p>
+                                    <p className="text-blue-700 dark:text-blue-300 text-sm mt-1">
+                                        Browse our course catalog below. Click any course to learn more, or{" "}
+                                        <button
+                                            onClick={login}
+                                            className="underline font-medium hover:text-blue-900 dark:hover:text-blue-100"
+                                        >
+                                            sign in
+                                        </button>
+                                        {" "}to get started.
+                                    </p>
+                                </div>
                             </div>
                         </div>
-                    </div>
+                        {/* Mobile wallet connection guide - only shows on mobile without wallet extension */}
+                        <MobileWalletGuide className="mb-6" />
+                    </>
                 )}
 
                 {error && (
@@ -174,61 +179,61 @@ export default function CoursesPage() {
                         };
 
                         return (
-                        <Link
-                            key={course.id}
-                            href={`/courses/${course.id}`}
-                            onClick={handleClick}
-                            className="group block bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors"
-                        >
-                            {/* Thumbnail */}
-                            <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative">
-                                {course.thumbnail_url ? (
-                                    <img
-                                        src={course.thumbnail_url}
-                                        alt={course.title}
-                                        className="w-full h-full object-cover"
-                                    />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-4xl">
-                                        📚
-                                    </div>
-                                )}
-
-                                {/* Gated badge */}
-                                {course.is_gated && !course.has_access && (
-                                    <div className="absolute top-3 right-3 bg-black/70 text-white px-2 py-1 rounded text-xs flex items-center gap-1">
-                                        🔒 Pass Required
-                                    </div>
-                                )}
-                                {course.is_gated && course.has_access && (
-                                    <div className="absolute top-3 right-3 bg-green-600/90 text-white px-2 py-1 rounded text-xs flex items-center gap-1">
-                                        ✓ Unlocked
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Content */}
-                            <div className="p-4">
-                                <h2 className="font-semibold text-black dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                    {course.title}
-                                </h2>
-                                {course.description && (
-                                    <p className="text-sm text-zinc-500 mt-1 line-clamp-2">
-                                        {course.description}
-                                    </p>
-                                )}
-
-                                {/* Meta */}
-                                <div className="flex items-center gap-3 mt-3 text-xs text-zinc-400">
-                                    {course.duration_minutes && (
-                                        <span>⏱ {course.duration_minutes} min</span>
+                            <Link
+                                key={course.id}
+                                href={`/courses/${course.id}`}
+                                onClick={handleClick}
+                                className="group block bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors"
+                            >
+                                {/* Thumbnail */}
+                                <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative">
+                                    {course.thumbnail_url ? (
+                                        <img
+                                            src={course.thumbnail_url}
+                                            alt={course.title}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-4xl">
+                                            📚
+                                        </div>
                                     )}
-                                    {course.difficulty && (
-                                        <span className="capitalize">📊 {course.difficulty}</span>
+
+                                    {/* Gated badge */}
+                                    {course.is_gated && !course.has_access && (
+                                        <div className="absolute top-3 right-3 bg-black/70 text-white px-2 py-1 rounded text-xs flex items-center gap-1">
+                                            🔒 Pass Required
+                                        </div>
+                                    )}
+                                    {course.is_gated && course.has_access && (
+                                        <div className="absolute top-3 right-3 bg-green-600/90 text-white px-2 py-1 rounded text-xs flex items-center gap-1">
+                                            ✓ Unlocked
+                                        </div>
                                     )}
                                 </div>
-                            </div>
-                        </Link>
+
+                                {/* Content */}
+                                <div className="p-4">
+                                    <h2 className="font-semibold text-black dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                        {course.title}
+                                    </h2>
+                                    {course.description && (
+                                        <p className="text-sm text-zinc-500 mt-1 line-clamp-2">
+                                            {course.description}
+                                        </p>
+                                    )}
+
+                                    {/* Meta */}
+                                    <div className="flex items-center gap-3 mt-3 text-xs text-zinc-400">
+                                        {course.duration_minutes && (
+                                            <span>⏱ {course.duration_minutes} min</span>
+                                        )}
+                                        {course.difficulty && (
+                                            <span className="capitalize">📊 {course.difficulty}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </Link>
                         );
                     })}
                 </div>

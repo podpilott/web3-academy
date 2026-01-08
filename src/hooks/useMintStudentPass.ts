@@ -7,8 +7,8 @@
  */
 
 import { useState, useCallback, useMemo } from "react";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
-import { useSignTransaction } from "@privy-io/react-auth/solana";
+import { usePrivy } from "@privy-io/react-auth";
+import { useSignTransaction, useWallets } from "@privy-io/react-auth/solana";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { mplTokenMetadata, createNft } from "@metaplex-foundation/mpl-token-metadata";
 import {
@@ -85,7 +85,7 @@ function getExternalWalletProvider(): SolanaProvider | null {
 
 export function useMintStudentPass(): UseMintStudentPass {
     const { authenticated, user } = usePrivy();
-    const { wallets } = useWallets();
+    const { wallets, ready: walletsReady } = useWallets();
     const { signTransaction: privySignTransaction } = useSignTransaction();
     const [isMinting, setIsMinting] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -115,18 +115,31 @@ export function useMintStudentPass(): UseMintStudentPass {
         return null;
     }, [user]);
 
-    // Get embedded wallet info from linked accounts
-    const getEmbeddedWallet = useCallback(() => {
-        if (!user) return null;
+    // Get embedded wallet from useWallets hook (returns ConnectedStandardSolanaWallet)
+    const getConnectedEmbeddedWallet = useCallback(() => {
+        // wallets from useWallets() are ConnectedStandardSolanaWallet objects
+        // The underlying standardWallet for Privy embedded wallets has isPrivyWallet = true
+        const embeddedWallet = wallets.find((w) => {
+            // Check if the underlying standard wallet is a Privy wallet
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const standardWallet = w.standardWallet as any;
+            return standardWallet?.isPrivyWallet === true;
+        });
+        return embeddedWallet || null;
+    }, [wallets]);
+
+    // Check if user has an embedded wallet in linkedAccounts (for wallet type detection)
+    const hasEmbeddedWalletAccount = useCallback(() => {
+        if (!user) return false;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const embeddedWallet = user.linkedAccounts?.find((account: any) =>
+        const embeddedAccount = user.linkedAccounts?.find((account: any) =>
             account.type === "wallet" &&
             account.chainType === "solana" &&
             account.walletClientType === "privy"
         );
 
-        return embeddedWallet || null;
+        return !!embeddedAccount;
     }, [user]);
 
     const walletAddress = getSolanaWalletAddress();
@@ -135,8 +148,7 @@ export function useMintStudentPass(): UseMintStudentPass {
     const walletType = useMemo((): "embedded" | "external" | null => {
         if (!user) return null;
 
-        const embeddedWallet = getEmbeddedWallet();
-        if (embeddedWallet) {
+        if (hasEmbeddedWalletAccount()) {
             return "embedded";
         }
 
@@ -146,7 +158,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         }
 
         return null;
-    }, [user, getEmbeddedWallet]);
+    }, [user, hasEmbeddedWalletAccount]);
 
     const mint = useCallback(async (): Promise<MintResult> => {
         setError(null);
@@ -158,11 +170,12 @@ export function useMintStudentPass(): UseMintStudentPass {
             }
 
             const solanaAddress = getSolanaWalletAddress();
-            const embeddedWallet = getEmbeddedWallet();
+            // Get the ConnectedStandardSolanaWallet from useWallets hook
+            const connectedWallet = getConnectedEmbeddedWallet();
 
             console.log("Solana address:", solanaAddress);
             console.log("Wallet type:", walletType);
-            console.log("Embedded wallet:", embeddedWallet);
+            console.log("Connected embedded wallet:", connectedWallet);
             console.log("All Privy wallets from useWallets:", wallets);
 
             if (!solanaAddress) {
@@ -180,17 +193,27 @@ export function useMintStudentPass(): UseMintStudentPass {
             }
 
             // Check if using embedded wallet
-            if (embeddedWallet) {
+            if (hasEmbeddedWalletAccount()) {
                 console.log("Using embedded wallet, will use Privy signTransaction...");
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const embeddedAddress = (embeddedWallet as any).address as string;
+
+                if (!walletsReady) {
+                    throw new Error(
+                        "Wallets are still loading. Please wait a moment and try again."
+                    );
+                }
+
+                if (!connectedWallet) {
+                    throw new Error(
+                        "Embedded wallet not ready. Please wait a moment and try again."
+                    );
+                }
 
                 // For embedded wallets, we need to create the transaction with Umi,
                 // then serialize it and sign with Privy's signTransaction
                 const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
 
                 // Get the embedded wallet public key in Umi format
-                const embeddedPublicKey = publicKey(embeddedAddress);
+                const embeddedPublicKey = publicKey(connectedWallet.address);
 
                 // Create a custom Umi signer for the embedded wallet
                 // This signer will call Privy's signTransaction when Umi needs to sign
@@ -201,8 +224,7 @@ export function useMintStudentPass(): UseMintStudentPass {
                         const serialized = umi.transactions.serialize(transaction);
                         const signed = await privySignTransaction({
                             transaction: serialized,
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            wallet: embeddedWallet as any,
+                            wallet: connectedWallet,
                         });
                         return umi.transactions.deserialize(signed.signedTransaction);
                     },
@@ -215,8 +237,7 @@ export function useMintStudentPass(): UseMintStudentPass {
                             const serialized = umi.transactions.serialize(tx);
                             const signed = await privySignTransaction({
                                 transaction: serialized,
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                wallet: embeddedWallet as any,
+                                wallet: connectedWallet,
                             });
                             results.push(umi.transactions.deserialize(signed.signedTransaction));
                         }
@@ -333,7 +354,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         } finally {
             setIsMinting(false);
         }
-    }, [authenticated, user, getSolanaWalletAddress, getEmbeddedWallet, walletType, wallets, privySignTransaction]);
+    }, [authenticated, user, getSolanaWalletAddress, getConnectedEmbeddedWallet, hasEmbeddedWalletAccount, walletType, wallets, walletsReady, privySignTransaction]);
 
     return { mint, isMinting, error, lastMint, walletAddress, walletType };
 }

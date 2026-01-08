@@ -1,14 +1,28 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { PrivyProvider as Privy } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
+import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import { config } from "@/lib/config";
 
 // Solana wallet connectors for browser extension detection
 const solanaConnectors = toSolanaWalletConnectors({
   shouldAutoConnect: true,
 });
+
+// Get the Solana chain identifier for Privy
+function getSolanaChainId(): "solana:mainnet" | "solana:devnet" | "solana:testnet" {
+  if (config.solana.network === "mainnet-beta") {
+    return "solana:mainnet";
+  }
+  return "solana:devnet";
+}
+
+// Get websocket URL from RPC URL
+function getWsUrl(rpcUrl: string): string {
+  return rpcUrl.replace("https://", "wss://").replace("http://", "ws://");
+}
 
 interface PrivyProviderProps {
   children: React.ReactNode;
@@ -20,6 +34,40 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
   // Only render Privy after client-side mount to avoid hydration mismatch
   useEffect(() => {
     setMounted(true);
+  }, []);
+
+  // Create Solana RPC configuration for Privy embedded wallet transactions
+  // Provide configs for both mainnet and devnet since Privy may default to mainnet
+  const solanaRpcs = useMemo(() => {
+    const rpcUrl = config.solana.rpcUrl;
+
+    // Use the configured RPC for the active network, and derive the other network's RPC
+    // For Helius, swap "devnet" <-> "mainnet" in the URL
+    const isHelius = rpcUrl.includes("helius-rpc.com");
+
+    let devnetRpc: string;
+    let mainnetRpc: string;
+
+    if (isHelius) {
+      // Helius URLs: devnet.helius-rpc.com or mainnet.helius-rpc.com
+      devnetRpc = rpcUrl.replace("mainnet.helius-rpc.com", "devnet.helius-rpc.com");
+      mainnetRpc = rpcUrl.replace("devnet.helius-rpc.com", "mainnet.helius-rpc.com");
+    } else {
+      // Fallback to public RPCs (may have rate limits)
+      devnetRpc = config.solana.network === "devnet" ? rpcUrl : "https://api.devnet.solana.com";
+      mainnetRpc = config.solana.network === "mainnet-beta" ? rpcUrl : "https://api.mainnet-beta.solana.com";
+    }
+
+    return {
+      "solana:devnet": {
+        rpc: createSolanaRpc(devnetRpc),
+        rpcSubscriptions: createSolanaRpcSubscriptions(getWsUrl(devnetRpc)),
+      },
+      "solana:mainnet": {
+        rpc: createSolanaRpc(mainnetRpc),
+        rpcSubscriptions: createSolanaRpcSubscriptions(getWsUrl(mainnetRpc)),
+      },
+    };
   }, []);
 
   // During SSR, render children without Privy wrapper
@@ -93,6 +141,10 @@ export function PrivyProvider({ children }: PrivyProviderProps) {
           solana: {
             connectors: solanaConnectors,
           },
+        },
+        // Solana RPC configuration for embedded wallet transactions
+        solana: {
+          rpcs: solanaRpcs,
         },
       }}
     >

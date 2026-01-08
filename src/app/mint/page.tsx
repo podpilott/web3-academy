@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useAuth } from "@/hooks/useAuth";
 import { useMintStudentPass } from "@/hooks/useMintStudentPass";
 import { usePassStatus } from "@/contexts/PassContext";
+import { EmbeddedWalletMinter } from "@/components/EmbeddedWalletMinter";
 import { config } from "@/lib/config";
 import Link from "next/link";
 
@@ -20,25 +21,77 @@ function getSolanaExplorerUrl(
     return `https://explorer.solana.com/${type}/${value}${cluster}`;
 }
 
+interface MintResult {
+    success: boolean;
+    mintAddress?: string;
+    signature?: string;
+    error?: string;
+}
+
 export default function MintPage() {
     const { login, authenticated, user, ready } = usePrivy();
     const { user: backendUser, isLoading: isSyncing } = useAuth();
-    const { mint, isMinting, error: mintError, lastMint } = useMintStudentPass();
+    const { mint, isMinting, error: mintError, lastMint, walletType } = useMintStudentPass();
     const { hasPass, isChecking: checkingPass, setHasPass, invalidateAndRefetch } = usePassStatus();
 
-    // Handle successful mint
+    // State for embedded wallet minting
+    const [embeddedMinting, setEmbeddedMinting] = useState(false);
+    const [embeddedMintResult, setEmbeddedMintResult] = useState<MintResult | null>(null);
+    const [embeddedError, setEmbeddedError] = useState<string | null>(null);
+
+    // Check if user has an embedded Solana wallet
+    const hasEmbeddedWallet = useMemo(() => {
+        if (!user) return false;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return user.linkedAccounts?.some((account: any) =>
+            account.type === "wallet" &&
+            account.chainType === "solana" &&
+            account.walletClientType === "privy"
+        );
+    }, [user]);
+
+    // Get Solana wallet address from linked accounts
+    const solanaWalletAddress = useMemo(() => {
+        if (!user) return null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const solanaAccount = user.linkedAccounts?.find((account: any) =>
+            account.type === "wallet" && account.chainType === "solana"
+        );
+        return solanaAccount && "address" in solanaAccount ? (solanaAccount.address as string) : null;
+    }, [user]);
+
+    // Handle successful mint (either hook or embedded component)
     useEffect(() => {
-        if (lastMint?.success) {
+        const successfulMint = lastMint?.success || embeddedMintResult?.success;
+        if (successfulMint) {
             setHasPass(true); // Optimistic update
             invalidateAndRefetch(); // Confirm with backend
         }
-    }, [lastMint, setHasPass, invalidateAndRefetch]);
+    }, [lastMint, embeddedMintResult, setHasPass, invalidateAndRefetch]);
 
     const handleMint = async () => {
         await mint();
     };
 
-    const walletAddress = user?.wallet?.address;
+    const handleEmbeddedMintStart = () => {
+        setEmbeddedMinting(true);
+        setEmbeddedError(null);
+    };
+
+    const handleEmbeddedMintComplete = (result: MintResult) => {
+        setEmbeddedMinting(false);
+        setEmbeddedMintResult(result);
+        if (!result.success && result.error) {
+            setEmbeddedError(result.error);
+        }
+    };
+
+    // Combined states for display
+    const isCurrentlyMinting = isMinting || embeddedMinting;
+    const currentError = mintError || embeddedError;
+    const successMint = lastMint?.success ? lastMint : embeddedMintResult?.success ? embeddedMintResult : null;
+
+    const walletAddress = solanaWalletAddress || user?.wallet?.address;
 
     // Loading state
     if (!ready) {
@@ -100,7 +153,7 @@ export default function MintPage() {
                                 Browse Courses
                             </Link>
                         </div>
-                    ) : lastMint?.success ? (
+                    ) : successMint ? (
                         // Just minted successfully
                         <div className="text-center">
                             <div className="text-5xl mb-4">🎉</div>
@@ -115,12 +168,12 @@ export default function MintPage() {
                             <div className="bg-zinc-50 dark:bg-zinc-800 rounded-lg p-4 mb-6 text-left">
                                 <p className="text-xs text-zinc-400 mb-2">NFT Address</p>
                                 <a
-                                    href={getSolanaExplorerUrl(lastMint.mintAddress!, "address")}
+                                    href={getSolanaExplorerUrl(successMint.mintAddress!, "address")}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-sm text-blue-500 hover:text-blue-600 font-mono break-all"
                                 >
-                                    {lastMint.mintAddress}
+                                    {successMint.mintAddress}
                                 </a>
                             </div>
 
@@ -168,29 +221,39 @@ export default function MintPage() {
                             </div>
 
                             {/* Error */}
-                            {mintError && (
+                            {currentError && (
                                 <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
                                     <p className="text-sm text-red-600 dark:text-red-400">
-                                        {mintError}
+                                        {currentError}
                                     </p>
                                 </div>
                             )}
 
-                            {/* Mint button */}
-                            <button
-                                onClick={handleMint}
-                                disabled={isMinting}
-                                className="w-full px-6 py-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-xl font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isMinting ? (
-                                    <span className="flex items-center justify-center gap-2">
-                                        <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
-                                        Minting...
-                                    </span>
-                                ) : (
-                                    "Mint Student Pass"
-                                )}
-                            </button>
+                            {/* Mint button - use embedded minter for embedded wallets */}
+                            {hasEmbeddedWallet && solanaWalletAddress ? (
+                                <EmbeddedWalletMinter
+                                    walletAddress={solanaWalletAddress}
+                                    collectionAddress={config.web3Academy.studentPassCollection || ""}
+                                    onMintStart={handleEmbeddedMintStart}
+                                    onMintComplete={handleEmbeddedMintComplete}
+                                    disabled={isCurrentlyMinting}
+                                />
+                            ) : (
+                                <button
+                                    onClick={handleMint}
+                                    disabled={isCurrentlyMinting}
+                                    className="w-full px-6 py-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-xl font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isCurrentlyMinting ? (
+                                        <span className="flex items-center justify-center gap-2">
+                                            <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
+                                            Minting...
+                                        </span>
+                                    ) : (
+                                        "Mint Student Pass"
+                                    )}
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>

@@ -6,16 +6,14 @@
  * - Embedded wallets (Privy-created for email/Google login) - uses Privy's signTransaction
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useSignTransaction, useWallets } from "@privy-io/react-auth/solana";
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
 import { mplTokenMetadata, createNft } from "@metaplex-foundation/mpl-token-metadata";
 import {
     generateSigner,
     publicKey,
     percentAmount,
-    transactionBuilder,
 } from "@metaplex-foundation/umi";
 import { walletAdapterIdentity } from "@metaplex-foundation/umi-signer-wallet-adapters";
 import { config } from "@/lib/config";
@@ -24,6 +22,63 @@ import { config } from "@/lib/config";
 const STUDENT_PASS_NAME = "Web3 Academy Student Pass";
 const STUDENT_PASS_SYMBOL = "W3ASP";
 const STUDENT_PASS_URI = "https://arweave.net/placeholder";
+
+/**
+ * Convert technical Solana errors to user-friendly messages
+ */
+function getReadableErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Insufficient funds / empty wallet
+    if (
+        message.includes("no record of a prior credit") ||
+        message.includes("insufficient funds") ||
+        message.includes("Insufficient funds") ||
+        message.includes("0x1")
+    ) {
+        return "Your wallet doesn't have enough SOL to complete this transaction. Please add SOL to your wallet and try again.";
+    }
+
+    // User rejected/cancelled
+    if (
+        message.includes("User rejected") ||
+        message.includes("user rejected") ||
+        message.includes("cancelled") ||
+        message.includes("canceled")
+    ) {
+        return "Transaction was cancelled.";
+    }
+
+    // Network/RPC errors
+    if (
+        message.includes("Network request failed") ||
+        message.includes("Failed to fetch") ||
+        message.includes("503") ||
+        message.includes("timeout")
+    ) {
+        return "Network error. Please check your connection and try again.";
+    }
+
+    // Blockhash expired
+    if (message.includes("blockhash") || message.includes("Blockhash")) {
+        return "Transaction expired. Please try again.";
+    }
+
+    // Simulation failed
+    if (message.includes("Simulation failed")) {
+        if (message.includes("no record of a prior credit")) {
+            return "Your wallet doesn't have enough SOL to complete this transaction. Please add SOL to your wallet and try again.";
+        }
+        return "Transaction simulation failed. Please try again or contact support.";
+    }
+
+    // Clean up long messages
+    if (message.length > 150) {
+        return "An error occurred while minting. Please try again.";
+    }
+
+    return message;
+}
 
 interface MintResult {
     success: boolean;
@@ -50,6 +105,12 @@ interface SolanaProvider {
     signAllTransactions<T>(txs: T[]): Promise<T[]>;
     signMessage(msg: Uint8Array): Promise<{ signature: Uint8Array } | Uint8Array>;
 }
+
+// Type for Solana sign transaction function from Privy
+type SolanaSignTransactionFn = (input: {
+    transaction: Uint8Array;
+    wallet: unknown;
+}) => Promise<{ signedTransaction: Uint8Array }>;
 
 /**
  * Get any available Solana wallet provider from browser extensions
@@ -84,12 +145,39 @@ function getExternalWalletProvider(): SolanaProvider | null {
 }
 
 export function useMintStudentPass(): UseMintStudentPass {
-    const { authenticated, user } = usePrivy();
-    const { wallets, ready: walletsReady } = useWallets();
-    const { signTransaction: privySignTransaction } = useSignTransaction();
+    const { authenticated, user, ready: privyReady } = usePrivy();
+
     const [isMinting, setIsMinting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [lastMint, setLastMint] = useState<MintResult | null>(null);
+
+    // Solana hooks state - loaded dynamically on client side
+    const [solanaHooks, setSolanaHooks] = useState<{
+        wallets: unknown[];
+        ready: boolean;
+        signTransaction: SolanaSignTransactionFn | null;
+    }>({ wallets: [], ready: false, signTransaction: null });
+
+    // Load Solana hooks on client side only
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        // Dynamically import Solana hooks when on client and Privy is ready
+        const loadSolanaHooks = async () => {
+            try {
+                const solanaModule = await import("@privy-io/react-auth/solana");
+                // Note: We can't call hooks here directly since we're outside render
+                // Instead, we'll use a different approach - render a hidden component
+                setSolanaHooks(prev => ({ ...prev, ready: true }));
+            } catch (err) {
+                console.warn("Failed to load Solana hooks:", err);
+            }
+        };
+
+        if (privyReady) {
+            loadSolanaHooks();
+        }
+    }, [privyReady]);
 
     // Get the Solana wallet address from Privy user.linkedAccounts
     const getSolanaWalletAddress = useCallback((): string | null => {
@@ -115,20 +203,7 @@ export function useMintStudentPass(): UseMintStudentPass {
         return null;
     }, [user]);
 
-    // Get embedded wallet from useWallets hook (returns ConnectedStandardSolanaWallet)
-    const getConnectedEmbeddedWallet = useCallback(() => {
-        // wallets from useWallets() are ConnectedStandardSolanaWallet objects
-        // The underlying standardWallet for Privy embedded wallets has isPrivyWallet = true
-        const embeddedWallet = wallets.find((w) => {
-            // Check if the underlying standard wallet is a Privy wallet
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const standardWallet = w.standardWallet as any;
-            return standardWallet?.isPrivyWallet === true;
-        });
-        return embeddedWallet || null;
-    }, [wallets]);
-
-    // Check if user has an embedded wallet in linkedAccounts (for wallet type detection)
+    // Check if user has an embedded wallet in linkedAccounts
     const hasEmbeddedWalletAccount = useCallback(() => {
         if (!user) return false;
 
@@ -169,14 +244,14 @@ export function useMintStudentPass(): UseMintStudentPass {
                 throw new Error("Please login first");
             }
 
+            if (!privyReady) {
+                throw new Error("Privy is still initializing. Please wait a moment and try again.");
+            }
+
             const solanaAddress = getSolanaWalletAddress();
-            // Get the ConnectedStandardSolanaWallet from useWallets hook
-            const connectedWallet = getConnectedEmbeddedWallet();
 
             console.log("Solana address:", solanaAddress);
             console.log("Wallet type:", walletType);
-            console.log("Connected embedded wallet:", connectedWallet);
-            console.log("All Privy wallets from useWallets:", wallets);
 
             if (!solanaAddress) {
                 throw new Error("No Solana wallet found. Please connect a Solana wallet.");
@@ -194,90 +269,18 @@ export function useMintStudentPass(): UseMintStudentPass {
 
             // Check if using embedded wallet
             if (hasEmbeddedWalletAccount()) {
-                console.log("Using embedded wallet, will use Privy signTransaction...");
+                console.log("Using embedded wallet...");
 
-                if (!walletsReady) {
-                    throw new Error(
-                        "Wallets are still loading. Please wait a moment and try again."
-                    );
-                }
+                // For embedded wallets, we need to dynamically get the Solana wallet and sign function
+                // Import the hooks at runtime
+                const solanaModule = await import("@privy-io/react-auth/solana");
 
-                if (!connectedWallet) {
-                    throw new Error(
-                        "Embedded wallet not ready. Please wait a moment and try again."
-                    );
-                }
-
-                // For embedded wallets, we need to create the transaction with Umi,
-                // then serialize it and sign with Privy's signTransaction
-                const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
-
-                // Get the embedded wallet public key in Umi format
-                const embeddedPublicKey = publicKey(connectedWallet.address);
-
-                // Create a custom Umi signer for the embedded wallet
-                // This signer will call Privy's signTransaction when Umi needs to sign
-                const embeddedWalletSigner = {
-                    publicKey: embeddedPublicKey,
-                    signTransaction: async (transaction: Parameters<typeof umi.transactions.serialize>[0]) => {
-                        console.log("Embedded wallet signTransaction called...");
-                        const serialized = umi.transactions.serialize(transaction);
-                        const signed = await privySignTransaction({
-                            transaction: serialized,
-                            wallet: connectedWallet,
-                        });
-                        return umi.transactions.deserialize(signed.signedTransaction);
-                    },
-                    signMessage: async (message: Uint8Array): Promise<Uint8Array> => {
-                        throw new Error("signMessage not supported for embedded wallets");
-                    },
-                    signAllTransactions: async (transactions: Parameters<typeof umi.transactions.serialize>[0][]) => {
-                        const results = [];
-                        for (const tx of transactions) {
-                            const serialized = umi.transactions.serialize(tx);
-                            const signed = await privySignTransaction({
-                                transaction: serialized,
-                                wallet: connectedWallet,
-                            });
-                            results.push(umi.transactions.deserialize(signed.signedTransaction));
-                        }
-                        return results;
-                    },
-                };
-
-                // Set the embedded wallet as the identity/payer using signerIdentity
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                umi.identity = embeddedWalletSigner as any;
-                umi.payer = embeddedWalletSigner as any;
-
-                // Generate new mint address
-                const nftMint = generateSigner(umi);
-
-                console.log("Creating NFT transaction with mint:", nftMint.publicKey.toString());
-
-                // Create and send the NFT
-                const result = await createNft(umi, {
-                    mint: nftMint,
-                    name: STUDENT_PASS_NAME,
-                    symbol: STUDENT_PASS_SYMBOL,
-                    uri: STUDENT_PASS_URI,
-                    sellerFeeBasisPoints: percentAmount(0),
-                    collection: {
-                        key: publicKey(collectionAddress),
-                        verified: false,
-                    },
-                }).sendAndConfirm(umi);
-
-                console.log("Mint successful!", result);
-
-                const mintResult: MintResult = {
-                    success: true,
-                    mintAddress: nftMint.publicKey.toString(),
-                    signature: Buffer.from(result.signature).toString("base64"),
-                };
-
-                setLastMint(mintResult);
-                return mintResult;
+                // We can't use hooks here, but we can access the underlying Privy client
+                // The embedded wallet signing needs to go through Privy's modal
+                throw new Error(
+                    "Embedded wallet minting requires the SolanaMintWrapper component. " +
+                    "Please use the MintWithSolanaHooks component instead."
+                );
             }
 
             // For external wallets, use the browser extension
@@ -343,7 +346,7 @@ export function useMintStudentPass(): UseMintStudentPass {
             return mintResult;
         } catch (err) {
             console.error("Mint error:", err);
-            const errorMessage = err instanceof Error ? err.message : "Unknown error occurred";
+            const errorMessage = getReadableErrorMessage(err);
             setError(errorMessage);
             const mintResult: MintResult = {
                 success: false,
@@ -354,7 +357,17 @@ export function useMintStudentPass(): UseMintStudentPass {
         } finally {
             setIsMinting(false);
         }
-    }, [authenticated, user, getSolanaWalletAddress, getConnectedEmbeddedWallet, hasEmbeddedWalletAccount, walletType, wallets, walletsReady, privySignTransaction]);
+    }, [authenticated, user, privyReady, getSolanaWalletAddress, hasEmbeddedWalletAccount, walletType]);
 
     return { mint, isMinting, error, lastMint, walletAddress, walletType };
+}
+
+/**
+ * Props for the embedded wallet mint component
+ */
+export interface EmbeddedMintProps {
+    onMintComplete: (result: MintResult) => void;
+    onMintStart: () => void;
+    collectionAddress: string;
+    walletAddress: string;
 }

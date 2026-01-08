@@ -189,13 +189,16 @@ export function useMintStudentPass(): UseMintStudentPass {
                 // then serialize it and sign with Privy's signTransaction
                 const umi = createUmi(config.solana.rpcUrl).use(mplTokenMetadata());
 
-                // Create a custom signer for the embedded wallet
-                // This creates a "signing function" that will be called by Umi
+                // Get the embedded wallet public key in Umi format
+                const embeddedPublicKey = publicKey(embeddedAddress);
+
+                // Create a custom Umi signer for the embedded wallet
+                // This signer will call Privy's signTransaction when Umi needs to sign
                 const embeddedWalletSigner = {
-                    publicKey: publicKey(embeddedAddress),
-                    signTransaction: async (tx: Parameters<typeof umi.transactions.serialize>[0]) => {
+                    publicKey: embeddedPublicKey,
+                    signTransaction: async (transaction: Parameters<typeof umi.transactions.serialize>[0]) => {
                         console.log("Embedded wallet signTransaction called...");
-                        const serialized = umi.transactions.serialize(tx);
+                        const serialized = umi.transactions.serialize(transaction);
                         const signed = await privySignTransaction({
                             transaction: serialized,
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -203,13 +206,12 @@ export function useMintStudentPass(): UseMintStudentPass {
                         });
                         return umi.transactions.deserialize(signed.signedTransaction);
                     },
-                    signMessage: async (message: Uint8Array) => {
-                        // Not implemented for now - use external wallet if needed
+                    signMessage: async (message: Uint8Array): Promise<Uint8Array> => {
                         throw new Error("signMessage not supported for embedded wallets");
                     },
-                    signAllTransactions: async (txs: Parameters<typeof umi.transactions.serialize>[0][]) => {
+                    signAllTransactions: async (transactions: Parameters<typeof umi.transactions.serialize>[0][]) => {
                         const results = [];
-                        for (const tx of txs) {
+                        for (const tx of transactions) {
                             const serialized = umi.transactions.serialize(tx);
                             const signed = await privySignTransaction({
                                 transaction: serialized,
@@ -222,9 +224,10 @@ export function useMintStudentPass(): UseMintStudentPass {
                     },
                 };
 
-                // Set the embedded wallet as the identity/payer
+                // Set the embedded wallet as the identity/payer using signerIdentity
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                umi.use(walletAdapterIdentity(embeddedWalletSigner as any));
+                umi.identity = embeddedWalletSigner as any;
+                umi.payer = embeddedWalletSigner as any;
 
                 // Generate new mint address
                 const nftMint = generateSigner(umi);
